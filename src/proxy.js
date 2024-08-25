@@ -49,6 +49,7 @@ export async function processRequest(request, reply) {
     const userAgent = randomUserAgent();
 
     try {
+        // Fetch the image with a stream
         const response = await fetch(request.params.url, {
             headers: {
                 ...lodash.pick(request.headers, ['cookie', 'dnt', 'referer']),
@@ -65,17 +66,25 @@ export async function processRequest(request, reply) {
             return handleRedirect(request, reply);
         }
 
-        const buffer = await response.buffer();
+        // Extract the response headers and content length
+        const originType = response.headers.get('content-type') || '';
+        const originSize = parseInt(response.headers.get('content-length'), 10) || 0;
 
+        // Set response parameters
+        request.params.originType = originType;
+        request.params.originSize = originSize;
+
+        // Copy headers to the reply
         copyHdrs(response, reply);
         reply.header('content-encoding', 'identity');
-        request.params.originType = response.headers.get('content-type') || '';
-        request.params.originSize = buffer.length;
 
+        // Check if the response should be compressed
         if (checkCompression(request)) {
-            return applyCompression(request, reply, buffer);
+            // Stream the image data directly to the compression function
+            return applyCompression(request, reply, response.body);
         } else {
-            return performBypass(request, reply, buffer);
+            // Stream the image data directly to the bypass function
+            return performBypass(request, reply, response.body);
         }
     } catch (err) {
         return handleRedirect(request, reply);
