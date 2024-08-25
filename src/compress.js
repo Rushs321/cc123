@@ -1,13 +1,13 @@
 import sharp from 'sharp';
 import { redirect } from './redirect.js';
 
-export async function compressImg(request, reply, imgData) {
+export async function compressImg(request, reply, imgStream) {
     const { webp, grayscale, quality, originSize } = request.params;
     const imgFormat = webp ? 'webp' : 'jpeg';
 
     try {
-        // Create the sharp instance and start the pipeline
-        let sharpInstance = sharp(imgData)
+        // Create the sharp instance without immediately loading data into memory
+        const sharpInstance = sharp()
             .grayscale(grayscale) // Apply grayscale conditionally
             .toFormat(imgFormat, {
                 quality, // Use the provided quality
@@ -16,18 +16,36 @@ export async function compressImg(request, reply, imgData) {
                 chromaSubsampling: webp ? '4:4:4' : '4:2:0', // Conditional chroma subsampling
             });
 
-        // Convert to buffer and get info
-        const { data, info } = await sharpInstance.toBuffer({ resolveWithObject: true });
+        // Pipe the input stream to sharp for processing
+        const transformStream = imgStream.pipe(sharpInstance);
 
-        // Send response with appropriate headers
+        // Set headers before sending the response
         reply
             .header('content-type', `image/${imgFormat}`)
-            .header('content-length', info.size)
-            .header('x-original-size', originSize)
-            .header('x-bytes-saved', originSize - info.size)
-            .code(200)
-            .send(data);
+            .header('x-original-size', originSize);
+
+        // Calculate content length after processing (only possible if you can buffer or the size is known in advance)
+        let processedSize = 0;
+        transformStream.on('data', (chunk) => {
+            processedSize += chunk.length;
+        });
+
+        transformStream.on('end', () => {
+            reply.header('content-length', processedSize);
+            reply.header('x-bytes-saved', originSize - processedSize);
+        });
+
+        // Pipe the processed image data to the reply output stream
+        reply.code(200);
+        transformStream.pipe(reply.raw);
+
+        // Handle stream errors
+        transformStream.on('error', (err) => {
+            console.error('Processing error:', err);
+            return redirect(request, reply);
+        });
     } catch (error) {
+        console.error('Unexpected error:', error);
         return redirect(request, reply);
     }
 }
